@@ -1,0 +1,17 @@
+[package]
+name = "tracing-dipstick"
+version = "0.1.0"
+authors = ["Michal 'vorner' Vaner <vorner@vorner.cz>"]
+edition = "2018"
+license = "Apache-2.0/MIT"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+dipstick = "0.9"
+tracing-core = { version = "0.1", default-features = false, features = ["std"] }
+tracing-subscriber = { version = "0.2", default-features = false, features = ["registry"] }
+
+[dev-dependencies]
+tracing = { version = "0.1", default-features = true, features = ["log-always"] }
+tracing-subscriber = { version = "0.2", default-features = true }
