@@ -13,5 +13,6 @@ tracing-core = { version = "0.1", default-features = false, features = ["std"] }
 tracing-subscriber = { version = "0.2", default-features = false, features = ["registry"] }
 
 [dev-dependencies]
+env_logger = "0.8"
+log = "0.4"
 tracing = { version = "0.1", default-features = true, features = ["log-always"] }
-tracing-subscriber = { version = "0.2", default-features = true }
