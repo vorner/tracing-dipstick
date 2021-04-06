@@ -10,56 +10,125 @@ use tracing_subscriber::registry::LookupSpan;
 const SCOPE_NAME: &str = "metrics.scope";
 const SCOPE_NAME_FULL: &str = "metrics.scope.full";
 
-const VALUE: &str = "metrics.value";
-const COUNTER: &str = "metrics.counter";
-const GAUGE: &str = "metrics.gauge";
+#[derive(Copy, Clone, Debug)]
+enum MetricType {
+    Counter,
+    Gauge,
+    Level,
+    Timer,
+}
 
-const TIME: &str = "metrics.time";
-const LEVEL: &str = "metrics.level";
+impl MetricType {
+    fn measure<P: MetricPoint>(self, point: &mut P, name: &str, value: i64) {
+        let scope = point.scope();
+        match self {
+            MetricType::Counter => scope.counter(name).count(value as _),
+            MetricType::Gauge => scope.gauge(name).value(value),
+            MetricType::Level => {
+                let level = scope.level(name);
+                level.adjust(value);
+                point.push_level(level, value);
+            }
+            MetricType::Timer => {
+                let timer = scope.timer(name);
+                let start = timer.start();
+                point.push_timer(timer, start);
+            }
+        }
+    }
+}
+
+const METRIC_TYPES: &[(&str, &str, MetricType, bool)] = &[
+    ("metrics.counter", "metrics.counter.", MetricType::Counter, true),
+    ("metrics.gauge", "metrics.gauge.", MetricType::Gauge, true),
+    ("metrics.level", "metrics.level.", MetricType::Level, true),
+    ("metrics.time", "", MetricType::Timer, false),
+];
+
+trait MetricPoint {
+    const SCOPED: bool;
+    type Scope: InputScope;
+    fn push_timer(&mut self, timer: Timer, start: TimeHandle);
+    fn push_level(&mut self, level: Level, decrement: i64);
+    fn scope(&self) -> &Self::Scope;
+}
+
+struct PointWrap<P>(P);
+
+impl<P: MetricPoint> Visit for PointWrap<P> {
+    fn record_debug(&mut self, _: &Field, _: &dyn Debug) {}
+    fn record_str(&mut self, field: &Field, value: &str) {
+        let name = field.name();
+        for tp in METRIC_TYPES {
+            if (tp.3 || P::SCOPED) && name == tp.0 {
+                tp.2.measure(&mut self.0, value, 1);
+                break;
+            }
+        }
+    }
+
+    fn record_i64(&mut self, field: &Field, value: i64) {
+        let name = field.name();
+        for tp in METRIC_TYPES {
+            if tp.3 && name.starts_with(tp.1) {
+                tp.2.measure(&mut self.0, &name[tp.1.len()..], value);
+            }
+        }
+    }
+    fn record_u64(&mut self, field: &Field, value: u64) {
+        self.record_i64(field, value as _);
+    }
+}
 
 #[derive(Clone)]
 struct Scope<S> {
     scope: S,
-    timer: Option<(Timer, TimeHandle)>,
+    // TODO: Small vecs? Put into the same vec to save one allocation?
+    timers: Vec<(Timer, TimeHandle)>,
+    levels: Vec<(Level, i64)>,
     // TODO: CPU timers
-    level: Option<Level>,
-    value: i64,
 }
 
-impl<S: InputScope> Visit for Scope<S> {
-    fn record_debug(&mut self, _: &Field, _: &dyn Debug) {}
-    fn record_str(&mut self, field: &Field, value: &str) {
-        let name = field.name();
-        if name == TIME {
-            let timer = self.scope.timer(value);
-            let start = timer.start();
-            self.timer = Some((timer, start));
-        } else if name == LEVEL {
-            let level = self.scope.level(value);
-            level.adjust(self.value);
-            self.level = Some(level);
-        } else if name == COUNTER {
-            self.scope.counter(value).count(self.value as _);
-        } else if name == GAUGE {
-            self.scope.gauge(value).value(self.value);
+impl<S> Drop for Scope<S> {
+    fn drop(&mut self) {
+        for (timer, start) in self.timers.drain(..) {
+            timer.stop(start);
+        }
+
+        for (level, decrement) in self.levels.drain(..) {
+            level.adjust(-decrement);
         }
     }
 }
 
-struct ValueVisitor<'a>(&'a mut i64);
-
-impl Visit for ValueVisitor<'_> {
-    fn record_debug(&mut self, _: &Field, _: &dyn Debug) {}
-    fn record_i64(&mut self, field: &Field, value: i64) {
-        if field.name() == VALUE {
-            *self.0 = value;
-        }
+impl<S: InputScope> MetricPoint for Scope<S> {
+    const SCOPED: bool = true;
+    type Scope = S;
+    fn push_level(&mut self, level: Level, decrement: i64) {
+        self.levels.push((level, decrement));
     }
-    fn record_u64(&mut self, field: &Field, value: u64) {
-        if field.name() == VALUE {
-            // TODO: Is this OK?
-            *self.0 = value as _;
-        }
+    fn push_timer(&mut self, timer: Timer, start: TimeHandle) {
+        self.timers.push((timer, start));
+    }
+    fn scope(&self) -> &S {
+        &self.scope
+    }
+}
+
+impl<S: InputScope> MetricPoint for &S {
+    const SCOPED: bool = false;
+    type Scope = S;
+
+    fn push_timer(&mut self, _: Timer, _: TimeHandle) {
+        unreachable!("Timers are not supported on events");
+    }
+
+    fn push_level(&mut self, _: Level, _: i64) {
+        // Levels on events are decremented manually, not at the end of some scope
+    }
+
+    fn scope(&self) -> &S {
+        self
     }
 }
 
@@ -110,7 +179,6 @@ where
             });
             named.unwrap_or_else(|| scope.clone())
         };
-        // TODO: Is it the newly created, or the parent?
         let scope = ctx
             .lookup_current()
             .and_then(|current| {
@@ -120,19 +188,18 @@ where
                     .map(|Scope { scope: s, .. }| named(s))
             })
             .unwrap_or_else(|| named(&self.scope));
-        let mut scope = Scope {
+
+        let mut scope = PointWrap(Scope {
             scope,
-            timer: None,
-            level: None,
-            value: 1,
-        };
-        attrs.record(&mut ValueVisitor(&mut scope.value));
+            timers: Vec::new(),
+            levels: Vec::new(),
+        });
         attrs.record(&mut scope);
 
         ctx.span(id)
             .expect("Missing newly created span")
             .extensions_mut()
-            .insert(scope);
+            .insert(scope.0);
     }
     // TODO: How about cloning/creating new IDs for spans?
     fn on_event(&self, event: &Event, ctx: Context<I>) {
@@ -144,47 +211,11 @@ where
                 current
                     .extensions()
                     .get::<Scope<S>>()
-                    .cloned()
+                    .map(|s| s.scope.clone())
                     .expect("Missing prepared scope")
-                    .scope
             })
             .unwrap_or_else(|| self.scope.clone());
 
-        let mut value = 1i64;
-        event.record(&mut ValueVisitor(&mut value));
-
-        struct MetricVisitor<'a, S> {
-            scope: &'a S,
-            value: i64,
-        }
-        impl<S: InputScope> Visit for MetricVisitor<'_, S> {
-            fn record_debug(&mut self, _: &Field, _: &dyn Debug) {}
-            fn record_str(&mut self, field: &Field, value: &str) {
-                let name = field.name();
-                if name == COUNTER {
-                    self.scope.counter(value).count(self.value as _);
-                } else if name == GAUGE {
-                    self.scope.gauge(value).value(self.value);
-                }
-            }
-        }
-        event.record(&mut MetricVisitor {
-            scope: &scope,
-            value,
-        });
-    }
-
-    fn on_close(&self, id: Id, ctx: Context<'_, I>) {
-        let current = ctx.span(&id).expect("Missing dying span");
-        let exts = current.extensions();
-        let scope: &Scope<S> = exts.get().expect("Missing span scope");
-
-        if let Some((timer, start)) = scope.timer.as_ref() {
-            timer.stop(*start);
-        }
-
-        if let Some(level) = scope.level.as_ref() {
-            level.adjust(-scope.value);
-        }
+        event.record(&mut PointWrap(&scope));
     }
 }

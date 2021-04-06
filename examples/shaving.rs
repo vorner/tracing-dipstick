@@ -37,7 +37,7 @@ fn main() {
     for i in 0..100 {
         let _this_yak = info_span!(
             "Yak",
-            no = i,
+            metrics.gauge.order = i,
             metrics.scope = "yak",
             metrics.time = "time",
             metrics.level = "active"
@@ -45,6 +45,6 @@ fn main() {
         .entered();
         debug!(metrics.counter = "started", "Starting shaving");
         thread::sleep(Duration::from_millis(600));
-        debug!(metrics.counter = "done", "Shaving done");
+        debug!(metrics.counter = "done", metrics.counter.legs = 4, "Shaving done");
     }
 }
