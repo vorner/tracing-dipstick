@@ -1,6 +1,7 @@
 use std::fmt::Debug;
 
 use dipstick::{InputScope, Level, Prefixed, TimeHandle, Timer};
+use once_cell::unsync::Lazy;
 use tracing_core::field::{Field, Visit};
 use tracing_core::span::{Attributes, Id};
 use tracing_core::{Event, Subscriber};
@@ -115,7 +116,11 @@ impl<S: InputScope> MetricPoint for Scope<S> {
     }
 }
 
-impl<S: InputScope> MetricPoint for &S {
+impl<S, F> MetricPoint for Lazy<S, F>
+where
+    S: InputScope,
+    F: FnOnce() -> S,
+{
     const SCOPED: bool = false;
     type Scope = S;
 
@@ -203,19 +208,26 @@ where
     }
     // TODO: How about cloning/creating new IDs for spans?
     fn on_event(&self, event: &Event, ctx: Context<I>) {
-        // TODO: Lazify
-        let scope = ctx
-            .lookup_current()
-            .map(|current| {
-                // FIXME: The clone!
-                current
-                    .extensions()
-                    .get::<Scope<S>>()
-                    .map(|s| s.scope.clone())
-                    .expect("Missing prepared scope")
-            })
-            .unwrap_or_else(|| self.scope.clone());
+        // TODO: Currently, we store a scope in each span. Instead we should store it only in the
+        // ones that are interesting. In particular:
+        // * Score on creation only if the span itself touches metrics (either has some or has a
+        //   metric scope).
+        // * Initialize it lazily on the first access. But extensions_mut might be slower?
+        let scope = Lazy::new(|| {
+            ctx
+                .lookup_current()
+                .map(|c| {
+                    // FIXME: It would be nice to avoid the clone. That should be possible, in
+                    // theory.
+                    c.extensions()
+                        .get::<Scope<S>>()
+                        .expect("Missing prepared scope")
+                        .scope
+                        .clone()
+                })
+                .unwrap_or_else(|| self.scope.clone())
+        });
 
-        event.record(&mut PointWrap(&scope));
+        event.record(&mut PointWrap(scope));
     }
 }
