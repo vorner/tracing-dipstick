@@ -1,3 +1,122 @@
+//! A bridge from [`tracing`]
+//!
+//! Traditionally, applications used separate instrumentation for metrics and logging. That is
+//! tiresome to set up. Using [`tracing`] offers an opportunity to use single instrumentation and
+//! export as both.
+//!
+//! This crate exports metrics through the [`dipstick`] metrics library, provided the
+//! instrumentation uses specific attributes to events and spans. To use it:
+//!
+//! * Register the [`DipstickLayer`] to consume the spans and events.
+//! * Use the `metrics.scope` on spans to create hierarchy of the metrics.
+//! * Mark the spans and events with further `metrics.*` attributes to collect metrics of specific
+//!   types and names.
+//!
+//! # Recognized attributes
+//!
+//! Whenever there's a span or event with one of these attributes, a metric is collected whenever
+//! it is encountered. The value of the attribute is the name of the metric and the type (the thing
+//! after the `metrics.`) corresponds to the metric types in [`dipstick`]'s [`InputScope`]. Spans
+//! happen when they are created and some effects happen when they are closed/destroyed.
+//!
+//! * `metrics.counter="name"`: Adds 1 to the metric counter called `name`.
+//! * `metrics.level="name"`: Adds 1 to the level called `name`. If it is present on a span, the 1
+//!   is subtracted when it is closed (it's more useful on spans).
+//! * `metrics.gauge="name"`: Sets the gauge to 1. This one is more useful in the second form
+//!   below.
+//! * `metrics.time="name"`: Records the time between the creation of the span and its destruction.
+//!   This attribute is accepted only on spans.
+//! * `metrics.scope="scope-name"`: Names of metrics that are inside this span get prefixed by this
+//!   name, eg. their names will be `scope-name.name`. Nested spans with this attributes accumulate
+//!   the name, eg `outer-scope-name.inner-scope-name.name`. This is accepted on spans only.
+//! * `metrics.scope.full="scope-name"`: Similar to the above, but the name is not nested, it is
+//!   replaced.
+//!
+//! The `counter`, `level` and `gauge` accept alternative variant of `metrics.type.name=value` (for
+//! example, `metrics.gauge.name=42`), which uses the given value instead of `1`.
+//!
+//! Unfortunately, typos don't cause compile errors, they are just ignored :-(.
+//!
+//! # Naming
+//!
+//! While the metrics are sent into the [`dipstick`] library, the attribute naming is quite
+//! general. This is on purpose. The author envisions that other crates might offer similar
+//! functionality, but export the metrics to a different library. In such case it is beneficial if
+//! the attributes are the same ‒ in such case changing the "backend" means only different
+//! initialization while the instrumentation of the whole code stays the same.
+//!
+//! # Crate status
+//!
+//! * There are some limitations about filtering (see the note at [`DipstickLayer`]). They may be
+//!   fixed either in [`tracing_subscriber`] or by changes in here, but both needs some work.
+//! * There are several performance inefficiencies that need to be eliminated.
+//! * The crate has been tested only lightly and it's possible it might not act correctly in some
+//!   corner cases.
+//!
+//! So, there's still some work to happen (and help in doing it is welcome). On the other hand, it
+//! is unlikely to cause some _serious_ problems, only incorrect metric readings.
+//!
+//! # Examples
+//!
+//! ```
+//! use std::thread;
+//! use std::time::Duration;
+//!
+//! use dipstick::{AtomicBucket, ScheduleFlush, Stream};
+//! use log::LevelFilter;
+//! use tracing::{debug, info_span, subscriber};
+//! use tracing_dipstick::DipstickLayer;
+//! use tracing_subscriber::layer::SubscriberExt;
+//! use tracing_subscriber::Registry;
+//!
+//! fn main() {
+//!     /*
+//!      * We use the log-always integration of tracing here and route that to the env logger, that has
+//!      * INFO enabled by default and can override by RUST_LOG to something else.
+//!      *
+//!      * We could use tracing_subscriber::fmt, *but* the EnvFilter there unfortunately disables
+//!      * events/spans for the whole stack, not for logging only. And we want all the metrics while we
+//!      * want only certain level of events.
+//!      */
+//!     env_logger::builder()
+//!         .filter_level(LevelFilter::Info)
+//!         .parse_default_env()
+//!         .init();
+//!
+//!     let root = AtomicBucket::new();
+//!     root.stats(dipstick::stats_all);
+//!     root.drain(Stream::write_to_stdout());
+//!     let _flush = root.flush_every(Duration::from_secs(5));
+//!
+//!     let bridge = DipstickLayer::new(root);
+//!     let subscriber = Registry::default().with(bridge);
+//!
+//!     subscriber::set_global_default(subscriber).unwrap();
+//!
+//!     const CNT: usize = 10;
+//!     let _yaks = info_span!("Shaving yaks", cnt = CNT, metrics.scope = "shaving").entered();
+//!     for i in 0..CNT {
+//!         let _this_yak = info_span!(
+//!             "Yak",
+//!             metrics.gauge.order = i,
+//!             metrics.scope = "yak",
+//!             metrics.time = "time",
+//!             metrics.level = "active"
+//!         )
+//!         .entered();
+//!         debug!(metrics.counter = "started", "Starting shaving");
+//!         thread::sleep(Duration::from_millis(60));
+//!         debug!(metrics.counter = "done", metrics.counter.legs = 4, "Shaving done");
+//!     }
+//! }
+//!
+//! ```
+//!
+//! [`tracing`]: https://docs.rs/tracing
+#![doc(test(attr(deny(warnings))))]
+#![forbid(unsafe_code)]
+#![warn(missing_docs)]
+
 use std::fmt::Debug;
 
 use dipstick::{InputScope, Level, Prefixed, TimeHandle, Timer};
@@ -137,6 +256,49 @@ where
     }
 }
 
+/// The bridge from [`tracing`](https://docs.rs/tracing) to [`dipstick`].
+///
+/// This takes information from tracing and propagates them into [`dipstick`] as metrics. It works
+/// as [`Layer`].
+///
+/// # Warning
+///
+/// Currently, [`tracing_subscriber`] doesn't allow filtering on per-layer basis. That means if
+/// there's another layer that filters (for example based on the level), it'll impact this layer
+/// too. This would negatively impact the gathered metrics as this expects to get them all.
+///
+/// It has been observed to work together with the `tracing`s `log-always` feature.
+///
+/// Future versions might bypass the [`Layer`] system and wrap a
+/// [`Subscriber`][tracing_core::Subscriber] directly.
+///
+/// # Examples
+///
+/// ```rust
+/// use std::time::Duration;
+///
+/// use dipstick::{AtomicBucket, ScheduleFlush, Stream};
+/// use log::LevelFilter;
+/// use tracing::subscriber;
+/// use tracing_dipstick::DipstickLayer;
+/// use tracing_subscriber::layer::SubscriberExt;
+/// use tracing_subscriber::Registry;
+///
+/// env_logger::builder()
+///     .filter_level(LevelFilter::Info)
+///     .parse_default_env()
+///     .init();
+///
+/// let root = AtomicBucket::new();
+/// root.stats(dipstick::stats_all);
+/// root.drain(Stream::write_to_stdout());
+/// let _flush = root.flush_every(Duration::from_secs(5));
+///
+/// let bridge = DipstickLayer::new(root);
+/// let subscriber = Registry::default().with(bridge);
+///
+/// subscriber::set_global_default(subscriber).unwrap();
+/// ```
 #[derive(Copy, Clone, Debug, Default)]
 pub struct DipstickLayer<S> {
     scope: S,
@@ -146,6 +308,9 @@ impl<S> DipstickLayer<S>
 where
     S: Clone + InputScope + Prefixed + 'static,
 {
+    /// Creates the bridge.
+    ///
+    /// Expects the scope into which it will put metrics.
     pub fn new(input_scope: S) -> Self {
         DipstickLayer { scope: input_scope }
     }

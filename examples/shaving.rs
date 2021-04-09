@@ -34,7 +34,7 @@ fn main() {
 
     const CNT: usize = 100;
     let _yaks = info_span!("Shaving yaks", cnt = CNT, metrics.scope = "shaving").entered();
-    for i in 0..100 {
+    for i in 0..CNT {
         let _this_yak = info_span!(
             "Yak",
             metrics.gauge.order = i,
