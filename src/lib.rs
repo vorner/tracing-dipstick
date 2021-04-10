@@ -159,7 +159,12 @@ impl MetricType {
 }
 
 const METRIC_TYPES: &[(&str, &str, MetricType, bool)] = &[
-    ("metrics.counter", "metrics.counter.", MetricType::Counter, true),
+    (
+        "metrics.counter",
+        "metrics.counter.",
+        MetricType::Counter,
+        true,
+    ),
     ("metrics.gauge", "metrics.gauge.", MetricType::Gauge, true),
     ("metrics.level", "metrics.level.", MetricType::Level, true),
     ("metrics.time", "", MetricType::Timer, false),
@@ -379,8 +384,7 @@ where
         //   metric scope).
         // * Initialize it lazily on the first access. But extensions_mut might be slower?
         let scope = Lazy::new(|| {
-            ctx
-                .lookup_current()
+            ctx.lookup_current()
                 .map(|c| {
                     // FIXME: It would be nice to avoid the clone. That should be possible, in
                     // theory.
