@@ -45,6 +45,10 @@ fn main() {
         .entered();
         debug!(metrics.counter = "started", "Starting shaving");
         thread::sleep(Duration::from_millis(600));
-        debug!(metrics.counter = "done", metrics.counter.legs = 4, "Shaving done");
+        debug!(
+            metrics.counter = "done",
+            metrics.counter.legs = 4,
+            "Shaving done"
+        );
     }
 }
