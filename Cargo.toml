@@ -2,10 +2,14 @@
 name = "tracing-dipstick"
 version = "0.1.0"
 authors = ["Michal 'vorner' Vaner <vorner@vorner.cz>"]
+description = "Bridge from tracing instrumentation to the dipstick metrics library"
+documentation = "https://docs.rs/tracing-dipstick"
+repository = "https://github.com/vorner/tracing-dipstick"
+readme = "README.md"
+keywords = ["tracing", "dipstick", "metrics"]
+categories = ["development-tools::debugging", "development-tools::profiling"]
 edition = "2018"
 license = "Apache-2.0/MIT"
-
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
 dipstick = "0.9"
