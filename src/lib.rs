@@ -24,7 +24,7 @@
 //!   is subtracted when it is closed (it's more useful on spans).
 //! * `metrics.gauge="name"`: Sets the gauge to 1. This one is more useful in the second form
 //!   below.
-//! * `metrics.time="name"`: Records the time between the creation of the span and its destruction.
+//! * `metrics.timer="name"`: Records the time between the creation of the span and its destruction.
 //!   This attribute is accepted only on spans.
 //! * `metrics.scope="scope-name"`: Names of metrics that are inside this span get prefixed by this
 //!   name, eg. their names will be `scope-name.name`. Nested spans with this attributes accumulate
@@ -100,7 +100,7 @@
 //!             "Yak",
 //!             metrics.gauge.order = i,
 //!             metrics.scope = "yak",
-//!             metrics.time = "time",
+//!             metrics.timer = "time",
 //!             metrics.level = "active"
 //!         )
 //!         .entered();
@@ -167,7 +167,7 @@ const METRIC_TYPES: &[(&str, &str, MetricType, bool)] = &[
     ),
     ("metrics.gauge", "metrics.gauge.", MetricType::Gauge, true),
     ("metrics.level", "metrics.level.", MetricType::Level, true),
-    ("metrics.time", "", MetricType::Timer, false),
+    ("metrics.timer", "", MetricType::Timer, false),
 ];
 
 trait MetricPoint {

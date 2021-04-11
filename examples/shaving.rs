@@ -39,7 +39,7 @@ fn main() {
             "Yak",
             metrics.gauge.order = i,
             metrics.scope = "yak",
-            metrics.time = "time",
+            metrics.timer = "time",
             metrics.level = "active"
         )
         .entered();
