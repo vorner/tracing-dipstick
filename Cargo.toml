@@ -1,6 +1,6 @@
 [package]
 name = "tracing-dipstick"
-version = "0.1.0"
+version = "0.1.1"
 authors = ["Michal 'vorner' Vaner <vorner@vorner.cz>"]
 description = "Bridge from tracing instrumentation to the dipstick metrics library"
 documentation = "https://docs.rs/tracing-dipstick"
