@@ -327,7 +327,7 @@ where
     I: Subscriber,
     for<'l> I: LookupSpan<'l>,
 {
-    fn new_span(&self, attrs: &Attributes, id: &Id, ctx: Context<I>) {
+    fn on_new_span(&self, attrs: &Attributes, id: &Id, ctx: Context<I>) {
         let named = |scope: &S| -> S {
             let mut named: Option<S> = None;
             struct NameVisitor<'a, S> {
