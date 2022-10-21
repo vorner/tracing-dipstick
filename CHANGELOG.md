@@ -1,3 +1,7 @@
+# 0.2.0
+
+* Update the tracing-subscriber.
+
 # 0.1.1
 
 * Renaming `metrics.time` to `metrics.timer` for consistency.
